@@ -1,7 +1,8 @@
 param(
   [string]$PostsFile = ".\data\posts.json",
   [string]$FeedFile = ".\data\feed.json",
-  [string]$OutputFile = ".\public\rss.xml"
+  [string]$OutputFile = ".\public\rss.xml",
+  [string]$ImageBaseUrl = "https://shmy1977-netizen.github.io/rss/public/images"
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,6 +32,88 @@ function Escape-XmlText {
   return [System.Security.SecurityElement]::Escape($Value)
 }
 
+function Get-ImageMimeType {
+  param([string]$Path)
+
+  $extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
+  switch ($extension) {
+    ".jpg" { return "image/jpeg" }
+    ".jpeg" { return "image/jpeg" }
+    ".png" { return "image/png" }
+    ".webp" { return "image/webp" }
+    ".gif" { return "image/gif" }
+    default { return "application/octet-stream" }
+  }
+}
+
+function Get-ImageFileName {
+  param(
+    [psobject]$Post,
+    [string]$SourcePath
+  )
+
+  $extension = [System.IO.Path]::GetExtension($SourcePath).ToLowerInvariant()
+  if (-not $extension) {
+    $extension = ".jpg"
+  }
+
+  $date = [DateTimeOffset]::Parse([string]$Post.published)
+  $key = "$($Post.title)|$($Post.link)|$($Post.published)"
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($key)
+  $sha1 = [System.Security.Cryptography.SHA1]::Create()
+  try {
+    $hashBytes = $sha1.ComputeHash($bytes)
+  }
+  finally {
+    $sha1.Dispose()
+  }
+  $hash = ([System.BitConverter]::ToString($hashBytes)).Replace("-", "").Substring(0, 10).ToLowerInvariant()
+
+  return "$($date.ToString("yyyyMMddHHmmss"))-$hash$extension"
+}
+
+function Resolve-PostImage {
+  param(
+    [psobject]$Post,
+    [string]$OutputDirectory,
+    [string]$BaseUrl
+  )
+
+  if (-not $Post.image) {
+    return $null
+  }
+
+  $image = [string]$Post.image
+  if ($image -match "^https?://") {
+    return [pscustomobject]@{
+      Url = $image
+      MimeType = Get-ImageMimeType -Path $image
+      Length = $null
+    }
+  }
+
+  if (-not (Test-Path -LiteralPath $image)) {
+    Write-Warning "Image file not found, skipping RSS image: $image"
+    return $null
+  }
+
+  $imagesDir = Join-Path $OutputDirectory "images"
+  if (-not (Test-Path -LiteralPath $imagesDir)) {
+    New-Item -ItemType Directory -Path $imagesDir | Out-Null
+  }
+
+  $fileName = Get-ImageFileName -Post $Post -SourcePath $image
+  $targetPath = Join-Path $imagesDir $fileName
+  Copy-Item -LiteralPath $image -Destination $targetPath -Force
+
+  $file = Get-Item -LiteralPath $targetPath
+  return [pscustomobject]@{
+    Url = "$($BaseUrl.TrimEnd("/"))/$fileName"
+    MimeType = Get-ImageMimeType -Path $targetPath
+    Length = $file.Length
+  }
+}
+
 if (-not (Test-Path -LiteralPath $PostsFile)) {
   throw "Posts file not found: $PostsFile"
 }
@@ -47,6 +130,8 @@ if ($outputDir -and -not (Test-Path -LiteralPath $outputDir)) {
   New-Item -ItemType Directory -Path $outputDir | Out-Null
 }
 
+$fullOutputDir = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $outputDir))
+
 $latestDate = if ($posts.Count -gt 0) {
   Convert-ToRfc822Date -DateText (($posts | Sort-Object published -Descending | Select-Object -First 1).published)
 }
@@ -60,9 +145,26 @@ $items = foreach ($post in ($posts | Sort-Object published -Descending)) {
   $date = Convert-ToRfc822Date -DateText $post.published
   $guid = if ($post.guid) { Escape-XmlText -Value $post.guid } else { $link }
   $description = $post.description
+  $imageInfo = Resolve-PostImage -Post $post -OutputDirectory $fullOutputDir -BaseUrl $ImageBaseUrl
+  $imageTags = ""
 
-  if ($post.image) {
-    $description = "$description`n`nImage: $($post.image)"
+  if ($imageInfo) {
+    $imageUrl = Escape-XmlText -Value $imageInfo.Url
+    $imageMimeType = Escape-XmlText -Value $imageInfo.MimeType
+    $description = "<p><img src=""$imageUrl"" alt=""$title"" /></p>`n`n$description"
+
+    $enclosureTag = if ($imageInfo.Length) {
+      "      <enclosure url=""$imageUrl"" length=""$($imageInfo.Length)"" type=""$imageMimeType"" />"
+    }
+    else {
+      ""
+    }
+
+    $imageTags = @"
+$enclosureTag
+      <media:content url="$imageUrl" medium="image" type="$imageMimeType" />
+      <media:thumbnail url="$imageUrl" />
+"@
   }
 
   @"
@@ -72,6 +174,7 @@ $items = foreach ($post in ($posts | Sort-Object published -Descending)) {
       <guid isPermaLink="false">$guid</guid>
       <pubDate>$date</pubDate>
       <description><![CDATA[$description]]></description>
+$imageTags
     </item>
 "@
 }
@@ -82,7 +185,7 @@ $channelDescription = Escape-XmlText -Value $feed.description
 
 $rss = @"
 <?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
   <channel>
     <title>$channelTitle</title>
     <link>$channelLink</link>
