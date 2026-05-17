@@ -10,7 +10,15 @@ function Convert-ToRfc822Date {
   param([string]$DateText)
 
   $date = [DateTimeOffset]::Parse($DateText)
-  return $date.ToString("r")
+  return Convert-DateToRfc822 -Date $date
+}
+
+function Convert-DateToRfc822 {
+  param([DateTimeOffset]$Date)
+
+  $culture = [System.Globalization.CultureInfo]::InvariantCulture
+  $offset = $Date.ToString("zzz", $culture).Replace(":", "")
+  return $Date.ToString("ddd, dd MMM yyyy HH:mm:ss ", $culture) + $offset
 }
 
 function Escape-XmlText {
@@ -43,7 +51,7 @@ $latestDate = if ($posts.Count -gt 0) {
   Convert-ToRfc822Date -DateText (($posts | Sort-Object published -Descending | Select-Object -First 1).published)
 }
 else {
-  [DateTimeOffset]::Now.ToString("r")
+  Convert-DateToRfc822 -Date ([DateTimeOffset]::Now)
 }
 
 $items = foreach ($post in ($posts | Sort-Object published -Descending)) {
