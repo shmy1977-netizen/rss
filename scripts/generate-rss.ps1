@@ -46,6 +46,29 @@ function Get-ImageMimeType {
   }
 }
 
+function Get-StableHash {
+  param([string]$Value)
+
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+  $sha1 = [System.Security.Cryptography.SHA1]::Create()
+  try {
+    $hashBytes = $sha1.ComputeHash($bytes)
+  }
+  finally {
+    $sha1.Dispose()
+  }
+
+  return ([System.BitConverter]::ToString($hashBytes)).Replace("-", "").Substring(0, 10).ToLowerInvariant()
+}
+
+function Get-PostGuid {
+  param([psobject]$Post)
+
+  $date = [DateTimeOffset]::Parse([string]$Post.published)
+  $hash = Get-StableHash -Value "$($Post.title)|$($Post.published)|$($Post.description)"
+  return "tag:shmy1977-netizen.github.io,$($date.ToString("yyyy-MM-dd")):rss/$hash"
+}
+
 function Get-ImageFileName {
   param(
     [psobject]$Post,
@@ -59,15 +82,7 @@ function Get-ImageFileName {
 
   $date = [DateTimeOffset]::Parse([string]$Post.published)
   $key = "$($Post.title)|$($Post.link)|$($Post.published)"
-  $bytes = [System.Text.Encoding]::UTF8.GetBytes($key)
-  $sha1 = [System.Security.Cryptography.SHA1]::Create()
-  try {
-    $hashBytes = $sha1.ComputeHash($bytes)
-  }
-  finally {
-    $sha1.Dispose()
-  }
-  $hash = ([System.BitConverter]::ToString($hashBytes)).Replace("-", "").Substring(0, 10).ToLowerInvariant()
+  $hash = Get-StableHash -Value $key
 
   return "$($date.ToString("yyyyMMddHHmmss"))-$hash$extension"
 }
@@ -141,9 +156,8 @@ else {
 
 $items = foreach ($post in ($posts | Sort-Object published -Descending)) {
   $title = Escape-XmlText -Value $post.title
-  $link = Escape-XmlText -Value $post.link
   $date = Convert-ToRfc822Date -DateText $post.published
-  $guid = if ($post.guid) { Escape-XmlText -Value $post.guid } else { $link }
+  $guid = Escape-XmlText -Value (Get-PostGuid -Post $post)
   $description = $post.description
   $imageInfo = Resolve-PostImage -Post $post -OutputDirectory $fullOutputDir -BaseUrl $ImageBaseUrl
   $imageTags = ""
@@ -170,7 +184,6 @@ $enclosureTag
   @"
     <item>
       <title>$title</title>
-      <link>$link</link>
       <guid isPermaLink="false">$guid</guid>
       <pubDate>$date</pubDate>
       <description><![CDATA[$description]]></description>
