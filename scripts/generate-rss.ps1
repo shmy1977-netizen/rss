@@ -32,6 +32,46 @@ function Escape-XmlText {
   return [System.Security.SecurityElement]::Escape($Value)
 }
 
+function Normalize-TextLine {
+  param([string]$Value)
+
+  if ($null -eq $Value) {
+    return ""
+  }
+
+  return ($Value -replace "\s+", " ").Trim()
+}
+
+function Remove-LeadingTitle {
+  param(
+    [string]$Description,
+    [string]$Title
+  )
+
+  if (-not $Description -or -not $Title) {
+    return $Description
+  }
+
+  $normalizedTitle = Normalize-TextLine -Value $Title
+  $lines = $Description -split "\r?\n"
+  $index = 0
+
+  while ($index -lt $lines.Count -and -not $lines[$index].Trim()) {
+    $index++
+  }
+
+  if ($index -lt $lines.Count -and (Normalize-TextLine -Value $lines[$index]) -eq $normalizedTitle) {
+    $remaining = @($lines[($index + 1)..($lines.Count - 1)])
+    while ($remaining.Count -gt 0 -and -not $remaining[0].Trim()) {
+      $remaining = @($remaining[1..($remaining.Count - 1)])
+    }
+
+    return ($remaining -join "`n").Trim()
+  }
+
+  return $Description
+}
+
 function Get-ImageMimeType {
   param([string]$Path)
 
@@ -158,7 +198,7 @@ $items = foreach ($post in ($posts | Sort-Object published -Descending)) {
   $title = Escape-XmlText -Value $post.title
   $date = Convert-ToRfc822Date -DateText $post.published
   $guid = Escape-XmlText -Value (Get-PostGuid -Post $post)
-  $description = $post.description
+  $description = Remove-LeadingTitle -Description $post.description -Title $post.title
   $imageInfo = Resolve-PostImage -Post $post -OutputDirectory $fullOutputDir -BaseUrl $ImageBaseUrl
   $imageTags = ""
 
