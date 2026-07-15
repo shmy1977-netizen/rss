@@ -7,6 +7,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "assert-project-active.ps1")
+$projectStateFile = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\data\automation-state.json"))
+Assert-ProjectPublishingActive -StateFile $projectStateFile -Action "RSS generation"
+
 function Convert-ToRfc822Date {
   param([string]$DateText)
 
